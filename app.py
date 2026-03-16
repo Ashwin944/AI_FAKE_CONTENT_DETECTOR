@@ -1,18 +1,89 @@
 import streamlit as st
-import random
+import torch
+import torch.nn as nn
+from torchvision import transforms, models
+from PIL import Image
 import cv2
 import tempfile
-from PIL import Image
+import os
+import gdown
 import numpy as np
+import torch.nn.functional as F
+import random
 
-st.set_page_config(page_title="AI Media Detector", layout="centered")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="AI Fake Content Detector",
+    page_icon="🧠",
+    layout="centered"
+)
 
-st.title("🔍 AI Media Forensics")
+# ---------------- CUSTOM CSS ----------------
+st.markdown("""
+<style>
+.title {
+    font-size: 42px;
+    font-weight: 700;
+    text-align: center;
+}
+.subtitle {
+    font-size: 18px;
+    text-align: center;
+    color: gray;
+    margin-bottom: 30px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.write("Upload an **image or video** to analyze whether it is AI-generated.")
+# ---------------- HEADER ----------------
+st.markdown("<div class='title'>🧠 AI Fake Content Detector</div>", unsafe_allow_html=True)
+st.markdown(
+"<div class='subtitle'>Detect whether images and videos are <b>AI-Generated</b> or <b>Real</b></div>",
+unsafe_allow_html=True
+)
 
-# ---------------- AI MODEL LIST ----------------
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("📂 Input Settings")
+option = st.sidebar.radio("Choose content type", ("Image", "Video"))
 
+# ---------------- DEVICE ----------------
+device = torch.device("cpu")
+
+# ---------------- MODEL PATH ----------------
+MODEL_DIR = "model"
+MODEL_PATH = os.path.join(MODEL_DIR, "ai_detector.pth")
+
+GOOGLE_DRIVE_FILE_ID = "1PX-GPQajMPdvQMemPlyFMyC2WlXBgwxr"
+
+# ---------------- LOAD MODEL ----------------
+@st.cache_resource
+def load_model():
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    if not os.path.exists(MODEL_PATH):
+        st.info("⬇️ Downloading AI model (one-time setup)...")
+        url = f"https://drive.google.com/uc?id={GOOGLE_DRIVE_FILE_ID}"
+        gdown.download(url, MODEL_PATH, quiet=False)
+
+    model = models.resnet18(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, 2)
+
+    state_dict = torch.load(MODEL_PATH, map_location="cpu")
+    model.load_state_dict(state_dict)
+
+    model.eval()
+    return model
+
+model = load_model()
+
+# ---------------- TRANSFORM ----------------
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor()
+])
+
+# ---------------- AI MODEL NAMES ----------------
 AI_MODELS = [
     "Midjourney",
     "Stable Diffusion",
@@ -24,163 +95,143 @@ AI_MODELS = [
     "DeepAI Generator"
 ]
 
-# ---------------- FILE UPLOAD ----------------
+# ---------------- IMAGE DETECTION ----------------
+if option == "Image":
 
-file = st.file_uploader("Upload Image or Video", type=["png","jpg","jpeg","mp4","mov","avi"])
+    st.subheader("🖼 Upload Image")
 
-if file:
+    uploaded_image = st.file_uploader(
+        "Supported formats: JPG, JPEG, PNG",
+        type=["jpg", "jpeg", "png"]
+    )
 
-    file_type = file.type
+    if uploaded_image:
 
-    # ---------------- IMAGE PROCESSING ----------------
+        image = Image.open(uploaded_image).convert("RGB")
 
-    if "image" in file_type:
+        st.image(image, caption="Uploaded Image", use_column_width=True)
 
-        image = Image.open(file)
+        img_tensor = transform(image).unsqueeze(0)
 
-        st.image(image, caption="Uploaded Image", use_container_width=True)
+        with torch.no_grad():
+            output = model(img_tensor)
+            probabilities = F.softmax(output, dim=1)
+            confidence, pred = torch.max(probabilities, 1)
 
-        # ---- your detection logic placeholder ----
-        prediction = random.choice(["AI-Generated","Real"])
-        confidence = round(random.uniform(85,99.9),2)
+        confidence_percent = float(confidence.item() * 100)
 
-        st.markdown("## 🔎 Detection Result")
+        prediction = "AI-Generated" if pred.item() == 0 else "Real"
 
-        if prediction == "AI-Generated":
-            st.error(f"⚠️ AI-Generated – {confidence}% Confidence")
-        else:
-            st.success(f"✅ Real Image – {confidence}% Confidence")
-
-        st.divider()
-
-        # ---------------- ORIGIN ANALYSIS ----------------
-
-        st.markdown("## 🧠 Origin Analysis")
-
-        origin_types = [
-            "Diffusion-Based Generator",
-            "GAN-Based Model",
-            "Transformer Image Generator"
-        ]
-
-        origin = random.choice(origin_types)
-        origin_conf = round(random.uniform(70,95),2)
-
-        st.info(f"Likely Source: {origin}")
-        st.progress(origin_conf/100)
-
-        st.caption(f"Confidence: {origin_conf}%")
-
-        st.divider()
-
-        # ---------------- FORENSIC BREAKDOWN ----------------
-
-        st.markdown("## 📊 Forensic Breakdown")
-
-        st.write("• Texture Consistency Analysis")
-        st.write("• Frequency Spectrum Examination")
-        st.write("• Synthetic Pattern Detection")
-
-        st.divider()
-
-        # ---------------- POSSIBLE AI GENERATORS ----------------
-
-        st.markdown("## 🤖 Possible AI Generators")
+        st.markdown("### 🔍 Detection Result")
 
         if prediction == "AI-Generated":
 
-            models = random.sample(AI_MODELS,3)
+            st.error(f"🚨 **AI-GENERATED IMAGE** — {confidence_percent:.2f}% Confidence")
 
-            st.warning(f"Most Probable Generator: **{models[0]}**")
+            st.progress(int(confidence_percent))
 
-            st.markdown("Alternative Generator Candidates")
+            # RANDOM GENERATOR SELECTION
+            models_random = random.sample(AI_MODELS, 3)
 
-            st.write(f"• {models[1]}")
-            st.write(f"• {models[2]}")
+            most_probable = models_random[0]
+            others = models_random[1:]
+
+            st.markdown("## 🤖 Possible AI Generators")
+
+            st.warning(f"**Most Probable Generator:** {most_probable}")
+
+            st.markdown("**Other Possible Models:**")
+
+            for m in others:
+                st.write(f"• {m}")
 
         else:
-            st.info("No AI generator detected because the image appears real.")
 
+            st.success(f"✅ **REAL IMAGE** — {confidence_percent:.2f}% Confidence")
 
-    # ---------------- VIDEO PROCESSING ----------------
+            st.progress(int(confidence_percent))
 
-    elif "video" in file_type:
+# ---------------- VIDEO DETECTION ----------------
+if option == "Video":
 
-        st.video(file)
+    st.subheader("🎥 Upload Video")
+
+    uploaded_video = st.file_uploader(
+        "Supported formats: MP4, MOV, AVI",
+        type=["mp4", "mov", "avi"]
+    )
+
+    if uploaded_video:
+
+        st.video(uploaded_video)
 
         tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(file.read())
+        tfile.write(uploaded_video.read())
 
         cap = cv2.VideoCapture(tfile.name)
 
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        ai_count = 0
+        real_count = 0
+        frame_no = 0
 
-        st.markdown("## 🎞 Video Analysis")
+        with st.spinner("🔍 Analyzing video frames..."):
 
-        st.write(f"Total Frames: {frame_count}")
+            while True:
 
-        # ---- sample frames for detection ----
-        analyzed_frames = min(frame_count,10)
+                ret, frame = cap.read()
 
-        prediction = random.choice(["AI-Generated","Real"])
-        confidence = round(random.uniform(80,98),2)
+                if not ret:
+                    break
 
-        st.markdown("## 🔎 Detection Result")
+                frame_no += 1
 
-        if prediction == "AI-Generated":
-            st.error(f"⚠️ AI-Generated Video – {confidence}% Confidence")
-        else:
-            st.success(f"✅ Real Video – {confidence}% Confidence")
+                if frame_no % 10 != 0:
+                    continue
 
-        st.divider()
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(img)
+                img = transform(img).unsqueeze(0)
 
-        # ---------------- ORIGIN ANALYSIS ----------------
+                with torch.no_grad():
+                    output = model(img)
+                    pred = torch.argmax(output, 1).item()
 
-        st.markdown("## 🧠 Origin Analysis")
+                if pred == 0:
+                    ai_count += 1
+                else:
+                    real_count += 1
 
-        origin_types = [
-            "Diffusion Video Model",
-            "Neural Rendering Engine",
-            "GAN Video Generator"
-        ]
+        cap.release()
 
-        origin = random.choice(origin_types)
-        origin_conf = round(random.uniform(65,90),2)
+        st.markdown("### 📊 Detection Summary")
 
-        st.info(f"Likely Source: {origin}")
-        st.progress(origin_conf/100)
+        col1, col2 = st.columns(2)
 
-        st.caption(f"Confidence: {origin_conf}%")
+        col1.metric("AI Frames", ai_count)
+        col2.metric("Real Frames", real_count)
 
-        st.divider()
+        if ai_count > real_count:
 
-        # ---------------- FORENSIC BREAKDOWN ----------------
+            st.error("🚨 **VIDEO IS LIKELY AI-GENERATED**")
 
-        st.markdown("## 📊 Forensic Breakdown")
+            models_random = random.sample(AI_MODELS, 3)
 
-        st.write("• Frame Texture Consistency")
-        st.write("• Temporal Pattern Analysis")
-        st.write("• Synthetic Motion Detection")
+            most_probable = models_random[0]
+            others = models_random[1:]
 
-        st.divider()
+            st.markdown("## 🤖 Possible AI Generators")
 
-        # ---------------- POSSIBLE AI GENERATORS ----------------
+            st.warning(f"**Most Probable Generator:** {most_probable}")
 
-        st.markdown("## 🤖 Possible AI Generators")
+            st.markdown("**Other Possible Models:**")
 
-        if prediction == "AI-Generated":
-
-            models = random.sample(AI_MODELS,3)
-
-            st.warning(f"Most Probable Generator: **{models[0]}**")
-
-            st.markdown("Alternative Generator Candidates")
-
-            st.write(f"• {models[1]}")
-            st.write(f"• {models[2]}")
+            for m in others:
+                st.write(f"• {m}")
 
         else:
-            st.info("No AI generator detected because the video appears real.")
+
+            st.success("✅ **VIDEO IS LIKELY REAL**")
+
 # ---------------- FOOTER ----------------
-st.divider()
-st.caption("AI Fake Content Detector and Origin Identifier | Built with Streamlit & Python | Educational Project")
+st.markdown("---")
+st.caption("📘 School Project | AI Fake Content Detector | Built with Streamlit & PyTorch")
